@@ -1,0 +1,8 @@
+[workspace]
+members = [
+	"bfi_lib",
+	"bfi_cli",
+	"bfi_py_binding",
+]
+
+resolver = "2"
