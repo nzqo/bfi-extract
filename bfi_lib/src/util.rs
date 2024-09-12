@@ -1,24 +1,6 @@
-/**
- * Extract a bitfield from an 8-byte buffer
- *
- * # Example
- *
- * ```ignore
- * use crate::util::extract_bitfield;
- * //                110
- * //              |>---<|
- * let buffer = 0b0001101;
- * let offset = 1;
- * let size   = 3;
- *
- * let result = extract_bitfield(buffer, offset, size);
- * assert!(result == 0b110);
- */
-pub fn extract_bitfield(buffer: u64, offset: u8, size: u8) -> u8 {
-    let mask = (1u64 << size) - 1;
-    ((buffer >> offset) & mask) as u8
-}
-
+/** ------------------------------------------------------------
+ * Library utility functions
+ * ------------------------------------------------------------- */
 pub fn get_u32_from_bytes(byte_stream: &[u8]) -> u32 {
     let mut buffer = [0u8; 4];
     let len = byte_stream.len().min(4);

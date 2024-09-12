@@ -8,6 +8,4 @@ pcap = "2.2"
 byteorder = "1.5"
 polars = { version = "0.42", features = ["parquet", "lazy"] }
 thiserror = "1.0.63"
-
-[features]
-full_extract = []
+bilge = "0.2.0"

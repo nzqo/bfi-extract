@@ -1,6 +1,8 @@
+/** ------------------------------------------------------------
+ * BFA extraction from bytestream payload
+ * ------------------------------------------------------------- */
 use crate::errors::BfaExtractionError;
 use crate::he_mimo_ctrl::HeMimoControl;
-use crate::util::get_u32_from_bytes;
 
 #[rustfmt::skip]
 pub struct ExtractionConfig {
@@ -9,12 +11,49 @@ pub struct ExtractionConfig {
 }
 
 impl ExtractionConfig {
-    pub fn from_he_mimo_ctrl(_mimo_ctrl: HeMimoControl) -> Self {
+    pub fn from_he_mimo_ctrl(_mimo_ctrl: &HeMimoControl) -> Self {
         ExtractionConfig {
             bitfield_pattern: vec![6, 6, 6, 4, 4, 4, 6, 6, 4, 4],
             num_subcarrier: 62,
         }
     }
+}
+
+/**
+ * Some sanity checks for the BFA bitfield extraction
+ */
+fn sanity_check_extraction(
+    bitfield_pattern: &[u8],
+    num_chunks: u16,
+    byte_stream_len: usize,
+) -> Result<(), BfaExtractionError> {
+    // Find the number of bits per chunk
+    let total_bits_per_chunk: usize = bitfield_pattern
+        .iter()
+        .map(|&bitsize| bitsize as usize)
+        .sum();
+
+    // Find the number of bits we expect present in the byte stream
+    let total_bits_needed = total_bits_per_chunk * num_chunks as usize;
+
+    // Ensure there are enough bits in the byte stream
+    if byte_stream_len * 8 < total_bits_needed {
+        return Err(BfaExtractionError::InsufficientBitsize {
+            required: total_bits_needed,
+            available: byte_stream_len * 8,
+        });
+    }
+
+    // See below in extract_bitfields for an explanation.
+    let max_allowed_bitsize = 9;
+    if bitfield_pattern.iter().any(|&x| x > max_allowed_bitsize) {
+        return Err(BfaExtractionError::InvalidBitfieldSize {
+            given: *bitfield_pattern.iter().max().unwrap(),
+            allowed: 9,
+        });
+    }
+
+    Ok(())
 }
 
 /**
@@ -40,33 +79,23 @@ fn extract_bitfields(
     bitfield_pattern: Vec<u8>,
     num_chunks: u16,
 ) -> Result<Vec<Vec<u16>>, BfaExtractionError> {
-    // Find the number of bits per chunk
-    let total_bits_per_chunk: usize = bitfield_pattern
-        .iter()
-        .map(|&bitsize| bitsize as usize)
-        .sum();
+    // Start with some sanity checks in debug mode. In release mode, we
+    // leave them out for performance reasons. This will cause a crash in
+    // API violations, but that's on you  ¯\_(ツ)_/¯
+    #[cfg(debug_assertions)]
+    sanity_check_extraction(bitfield_pattern.as_slice(), num_chunks, byte_stream.len())?;
 
-    // Find the number of bits we expect present in the byte stream
-    let total_bits_needed = total_bits_per_chunk * num_chunks as usize;
-
-    // Ensure there are enough bits in the byte stream
-    if byte_stream.len() * 8 < total_bits_needed {
-        return Err(BfaExtractionError::InsufficientBitsize {
-            required: total_bits_needed,
-            available: byte_stream.len() * 8,
-        });
-    }
-
-    // Bit window:
-    // To extract bit-fields of at most size 8, we keep a window to slide
-    // through 2 bytes of the byte stream at a time. Within the window, we
-    // need a bit offset to look at. After reading N bits, we advance the
-    // offset by N. After processing a full byte, we advance the window.
-    let mut bit_window = get_u32_from_bytes(byte_stream);
-    let mut window_offset = 0; // Number of valid bits in the bit window
-    let mut curr_byte = 2; // Tracks the current bit position in the byte stream
-
-    // Vector to store results in
+    // --------------------------------------------------------------------------
+    // Bit window processing:
+    // We use a multi-byte integer as a sliding window over the byte stream to
+    // extract bitfields. An index tracks the last processed bit. Since we shift
+    // by 8 bits (1 byte) after processing, at most 7 bits can remain unprocessed
+    // in the buffer. Therefore, to extract a bitfield of size N, the window must
+    // be at least N+7 bits to handle the worst case. For BFI, the WiFi standard
+    // specifies at most a bitsize of 9 for an angle, so a 16bit buffer suffices.
+    let mut bit_window = u16::from_le_bytes([byte_stream[0], byte_stream[1]]);
+    let mut window_offset = 0; // bit-offset pointing past last processed bit
+    let mut curr_byte = 2; // stream offset past current window edge
     let mut result = Vec::with_capacity(num_chunks as usize);
 
     for _ in 0..num_chunks {
@@ -75,26 +104,25 @@ fn extract_bitfields(
         for &bit_length in &bitfield_pattern {
             // If the to-be-processed bitfield is not completely within the
             // 16 bit, we need to advance the window.
-            while window_offset + bit_length > 32 {
+            while window_offset + bit_length > 16 {
                 // Shift in new byte from the left into window and advance
-                let next_byte = byte_stream[curr_byte] as u32;
-                bit_window = (bit_window >> 8) | (next_byte << (32 - 8));
+                let next_byte = byte_stream[curr_byte] as u16;
+                bit_window = (bit_window >> 8) | (next_byte << 8);
                 window_offset -= 8;
                 curr_byte += 1;
             }
 
             // Extract the requested number of bits from the window (MSB first)
-            let mask = (1 << bit_length) - 1 as u32;
-            let bitfield = (bit_window >> window_offset) as u32 & mask;
+            let mask = (1 << bit_length) - 1 as u16;
+            let bitfield = (bit_window >> window_offset) as u16 & mask;
 
-            // Add the extracted bitfield to the chunk
-            chunk.push(bitfield as u16);
-
-            // Clear the extracted bits from the window
+            // Add the extracted bitfield to the chunk and advance pointer to
+            // next bits in window to be processed.
+            chunk.push(bitfield);
             window_offset += bit_length;
         }
 
-        // Push the chunk (representing the bitfields) to the result
+        // Collect the chunk
         result.push(chunk);
     }
 
@@ -149,11 +177,11 @@ mod tests {
     fn test_large_bitfields() {
         // Example payload 11001010 11110000
         // Reverse:        01010011 00001111
-        // Chunk:          0101001100 0011 11
-        // Reverse:        0011001010 1100 11
+        // Chunk:          010100110 00011 11
+        // Reverse:        011001010 11000 11
         let byte_stream: &[u8] = &[0b11001010, 0b11110000];
-        let expected: Vec<Vec<u16>> = vec![vec![0b0011001010, 0b1100, 0b11]];
-        let bitfield_pattern = vec![10, 4, 2]; // Example pattern (6 bits, 4 bits, 4 bits)
+        let expected: Vec<Vec<u16>> = vec![vec![0b011001010, 0b11000, 0b11]];
+        let bitfield_pattern = vec![9, 5, 2]; // Example pattern (6 bits, 4 bits, 4 bits)
         let num_chunks = 1; // Example number of chunks
 
         let result = extract_bitfields(byte_stream, bitfield_pattern, num_chunks);
@@ -171,8 +199,6 @@ mod tests {
     #[test]
     fn test_todo_more() {
         // write a test that errors when wrong bitshift is used
-
-        
     }
 
     #[test]
