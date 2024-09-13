@@ -96,12 +96,15 @@ fn extract_bitfields(
     let mut bit_window = u16::from_le_bytes([byte_stream[0], byte_stream[1]]);
     let mut window_offset = 0; // bit-offset pointing past last processed bit
     let mut curr_byte = 2; // stream offset past current window edge
+
+    // Preallocate result vectors and bitmasks
     let mut result = Vec::with_capacity(num_chunks as usize);
+    let mut chunk = Vec::with_capacity(bitfield_pattern.len());
+    let masks: Vec<u16> = bitfield_pattern.iter().map(|&l| (1 << l) - 1).collect();
 
     for _ in 0..num_chunks {
-        let mut chunk = Vec::with_capacity(bitfield_pattern.len());
-
-        for &bit_length in &bitfield_pattern {
+        chunk.clear();
+        for (i, &bit_length) in bitfield_pattern.iter().enumerate() {
             // If the to-be-processed bitfield is not completely within the
             // 16 bit, we need to advance the window.
             while window_offset + bit_length > 16 {
@@ -113,8 +116,8 @@ fn extract_bitfields(
             }
 
             // Extract the requested number of bits from the window (MSB first)
-            let mask = (1 << bit_length) - 1 as u16;
-            let bitfield = (bit_window >> window_offset) as u16 & mask;
+            let mask = masks[i];
+            let bitfield = (bit_window >> window_offset) & mask;
 
             // Add the extracted bitfield to the chunk and advance pointer to
             // next bits in window to be processed.
@@ -123,7 +126,7 @@ fn extract_bitfields(
         }
 
         // Collect the chunk
-        result.push(chunk);
+        result.push(chunk.clone());
     }
 
     Ok(result)
