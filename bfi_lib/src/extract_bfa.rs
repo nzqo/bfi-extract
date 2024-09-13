@@ -3,133 +3,127 @@
  * BFA extraction from bytestream payload
  * ------------------------------------------------------------- */
 use crate::errors::BfaExtractionError;
-use crate::he_mimo_ctrl::HeMimoControl;
 use crate::he_mimo_ctrl::Bandwidth;
-use bilge::prelude::*;
+use crate::he_mimo_ctrl::HeMimoControl;
 
+/**
+ * Extraction config contains all required parameters to extract the
+ * original Phi/Psi angles from the compressed feedback information.
+ */
 #[rustfmt::skip]
-
 pub struct ExtractionConfig {
 	pub bitfield_pattern : Vec<u8>, // Length of bitfields per subcarrier-chunk
-	pub num_subcarrier   : u16,     // Number of subcarriers
-}
-pub struct  PhiPsiBit{
-    pub phi_bit:u8,         // Phi vit value 
-    pub psi_bit:u8,         // Psi bit value 
+	pub num_subcarrier   : usize,   // Number of subcarriers
 }
 
+/**
+ * Compressed Feedback contains two types of angles
+ */
+enum Angles {
+    Phi,
+    Psi,
+}
 
-// Define constant patterns 
-const PATTERN_2_1: [&str; 2] =  ["phi", "psi"]; // same pattrn for 2x2
-const PATTERN_3_1: [&str; 4] =  ["phi", "phi", "psi", "psi"];
-const PATTERN_3_2: [&str; 6] =  ["phi", "phi", "psi", "psi", "phi", "psi"]; // same pattrn for 3x3
-const PATTERN_4_1: [&str; 6] =  ["phi", "phi", "phi", "psi", "psi","psi"];
-const PATTERN_4_2: [&str; 10] = ["phi","phi","phi","psi","psi","psi","phi","phi","psi","psi"]; 
-const PATTERN_4_3: [&str; 12] = ["phi","phi","phi","psi","psi","psi","phi","phi","psi","psi","phi","psi"]; // same pattrn for 4x4
+use Angles::{Phi, Psi};
+
+/**
+ * Depending on the HE MIMO Control configuration, every angle is encoded
+ * with a different number of bits
+ */
+struct CompressedAngleBitSizes {
+    phi_bit: u8,
+    psi_bit: u8,
+}
+
+/**
+ * The configuration also determines the amount of angles and in which order
+ * they appear in the bytestream. This array lists these orders.
+ */
+#[rustfmt::skip]
+const ANGLE_PATTERNS: &[&[Angles]] = &[                            // (nr_index, nc_index):
+    &[Phi, Psi],                                                   // (1, 0) | (1, 2)
+    &[Phi, Phi, Psi, Psi],                                         // (2, 0)
+    &[Phi, Phi, Psi, Psi, Phi, Psi],                               // (2, 1) | (2, 2)
+    &[Phi, Phi, Phi, Psi, Psi, Psi],                               // (3, 0)
+    &[Phi, Phi, Phi, Psi, Psi, Psi, Phi, Phi, Psi, Psi],           // (3, 1)
+    &[Phi, Phi, Phi, Psi, Psi, Psi, Phi, Phi, Psi, Psi, Phi, Psi]  // (3, 2) | (3, 3)
+];
 
 impl ExtractionConfig {
-    pub fn from_he_mimo_ctrl(mimo_ctrl: &HeMimoControl) -> Self {
-        /*
-        * ******************* derive PhiPsiBit for  bitfield_pattern *******************  
-        */
-        // Create a new instance of PhiPsiBit according to the values of codebook_information
-        // and feedback type, if not matched raise error 
-        // for mor information see IEEE 802.11ax Table 9-29a
-        let phi_psi = match (mimo_ctrl.codebook_info().value(), mimo_ctrl.feedback_type().value()) {
-            (0, 0) => PhiPsiBit { phi_bit: 4, psi_bit: 2 },     // fb 0 -> SU 
-            (0, 1) => PhiPsiBit { phi_bit: 7, psi_bit: 5 },     // fb 1 -> MU
-            (1, 0) => PhiPsiBit { phi_bit: 6, psi_bit: 4 },     // fb 0 -> SU
-            (1, 1) => PhiPsiBit { phi_bit: 9, psi_bit: 7 },     // fb 1 -> MU
-            (_, 2) => panic!(" Feedback type is set to CQI (Channel Quality Indication) coodbook is reserved"),
-            // (_, 1) => println!("The Config suggest MU-MIMO, this processing focus on SU"), 
-            _ => panic!("Invalid coodebook or feedback type values"),
-        };
-        
-        /*
-        * ******************* Set bitfield_pattern *******************  
-        */
-        let nr_index = mimo_ctrl.nr_index().value() as usize;
-        let nc_index = mimo_ctrl.nc_index().value() as usize;
+    /**
+     * Get pattern in which angles appear in the compressed bitstream
+     */
+    fn get_pattern(nr_index: u8, nc_index: u8) -> &'static [Angles] {
+        match (nr_index, nc_index) {
+            (1, 0) | (1, 2) => ANGLE_PATTERNS[0],
+            (2, 0) => ANGLE_PATTERNS[1],
+            (2, 1) | (2, 2) => ANGLE_PATTERNS[2],
+            (3, 0) => ANGLE_PATTERNS[3],
+            (3, 1) => ANGLE_PATTERNS[4],
+            (3, 2) | (3, 3) => ANGLE_PATTERNS[5],
+            _ => panic!("Invalid nr_index or nc_index"),
+        }
+    }
 
-        let selected_pattern: &[&str] = if nr_index >= nc_index {
-            // NOTE: nr and nc are -1 due to indexing by 0 
-            if (nr_index == 1 && nc_index == 0 ) || (nr_index == 1 && nc_index == 2){ // 2x1 and 2x2
-                &PATTERN_2_1
-            } else if nr_index == 2 && nc_index == 0 { //3x1
-                &PATTERN_3_1
-            } else if (nr_index == 2 && nc_index == 1)  || (nr_index == 2 && nc_index == 2){ //3x2 and 3x3
-                &PATTERN_3_2
-            } else if nr_index == 3 && nc_index == 0 { //4x1
-                &PATTERN_4_1
-            } else if nr_index == 3 && nc_index == 1 { // 4x2
-                &PATTERN_4_2
-            } else if (nr_index == 3 && nc_index == 2) || (nr_index == 3 && nc_index == 3) { // 4x3 and 4x4
-                &PATTERN_4_3
-            } else {
-                panic!("Invalid nr_index or nc_index in the HE Mimo Control field ")
-            }
-        } else {
-                panic!("Invalid nr_index or nc_index in the HE Mimo Control field ");
+    /**
+     * Get an extraction configuration from the HeMimoControl header specification
+     * The extraction configuration specifies how to extract the compressed angles
+     * from the payload
+     */
+    pub fn from_he_mimo_ctrl(mimo_ctrl: &HeMimoControl) -> Self {
+        #[rustfmt::skip]
+        let phi_psi = match (
+            mimo_ctrl.codebook_info().value(),
+            mimo_ctrl.feedback_type().value(),
+        ) {
+            (0, 0) => CompressedAngleBitSizes { phi_bit: 4, psi_bit: 2 },
+            (0, 1) => CompressedAngleBitSizes { phi_bit: 7, psi_bit: 5 },
+            (1, 0) => CompressedAngleBitSizes { phi_bit: 6, psi_bit: 4 },
+            (1, 1) => CompressedAngleBitSizes { phi_bit: 9, psi_bit: 7 },
+            _ => panic!("Invalid codebook or feedback type"),
         };
-    
-        let bitfield_pattern: Vec<u8> = selected_pattern.iter()
-            .map(|&placeholder| match placeholder {
-                "phi" => phi_psi.phi_bit, // Substitute 'phi' with PhiPsiBit.psi_bit
-                "psi" => phi_psi.psi_bit, // Substitute 'psi' with PhiPsiBit.psi_bit
-                _ => panic!("Something went wrong wit the place holder while mapping its real values"),   
+
+        let nr_index = mimo_ctrl.nr_index().value();
+        let nc_index = mimo_ctrl.nc_index().value();
+
+        let bitfield_pattern: Vec<u8> = Self::get_pattern(nr_index, nc_index)
+            .iter()
+            .map(|pattern| match pattern {
+                Angles::Phi => phi_psi.phi_bit,
+                Angles::Psi => phi_psi.psi_bit,
             })
             .collect();
-            
-            let mut num_sub = 0;
-            /*
-            * ******************* Set BW *******************  
-            */
-            // NOTE: based on grouping bit the number of subcarrier change 
-            // for more details see IEEE 802.11ax Table 9-91a and Table 9-91e
-            if mimo_ctrl.grouping().value() == 0{   // subcarrier grouping: 4
-            num_sub = match mimo_ctrl.bandwidth().try_into(){
-                Ok(Bandwidth::Bw20) => 64,          // [–122, –120, –116, …, –8, –4, –2, 2, 4, 8, …, 116, 120, 122]
-                Ok(Bandwidth::Bw40) => 122,         // [–244, –240, …, –8, –4, 4, 8, …, 240, 244]
-                Ok(Bandwidth::Bw80) => 250,         // [–500, –496, …, –8, –4, 4, 8, …, 496, 500]
-                Ok(Bandwidth::Bw160) => 500,        // [–1012, –1008, …, –520, –516, –508, –504, …, –16, –12, 12, 16, …, 504, 508, 516, 520, …, 1008, 1012]
-                _ => panic!("Invalid BW")
-            };          
 
-            } else if mimo_ctrl.grouping().value() == 1 {   // subcarrier grouping: 4
-            // println!("The Config suggest grouping of 16, this processing focus on grouping of 4"),
-            num_sub = match mimo_ctrl.bandwidth().try_into(){
-                    Ok(Bandwidth::Bw20) => 50,      // [–122, –116, –100, …, –20, –4, –2, 2, 4, 20, …, 100, 116, 122]
-                    Ok(Bandwidth::Bw40) => 32,      // [–244, –228, …, –20, –4, 4, 20, …, 228, 244]
-                    Ok(Bandwidth::Bw80) => 64,      // [–500, –484, …, –20, –4, 4, 20, …, 484, 500]
-                    Ok(Bandwidth::Bw160) => 160,    //  [–1012, –996, …, –532, –516, –508, –492, …, –28, –12, 12, 28, …, 492, 508, 516, 532, …, 996, 1012]
-                    _ => panic!("Invalid BW")
-            };  
-            } else {
-                panic!("Invalid grouping of subcarrier");
-            }
+        // NOTE: based on grouping bit the number of subcarrier change
+        // for more details see IEEE 802.11ax Table 9-91a and Table 9-91e
+        let num_sub = match (
+            mimo_ctrl.grouping().value(),
+            mimo_ctrl.bandwidth().try_into(),
+        ) {
+            (0, Ok(Bandwidth::Bw20)) => 64,
+            (0, Ok(Bandwidth::Bw40)) => 122,
+            (0, Ok(Bandwidth::Bw80)) => 250,
+            (0, Ok(Bandwidth::Bw160)) => 500,
+            (1, Ok(Bandwidth::Bw20)) => 50,
+            (1, Ok(Bandwidth::Bw40)) => 32,
+            (1, Ok(Bandwidth::Bw80)) => 64,
+            (1, Ok(Bandwidth::Bw160)) => 160,
+            _ => panic!("Invalid grouping or BW"),
+        };
 
-
-            // Initialize the ExtractionConfig
-            let config = ExtractionConfig {
-                bitfield_pattern: bitfield_pattern,
-                num_subcarrier: num_sub,
-            };
-
-
-        config 
+        ExtractionConfig {
+            bitfield_pattern: bitfield_pattern,
+            num_subcarrier: num_sub,
+        }
     }
 }
-
-
-
-
 
 /**
  * Some sanity checks for the BFA bitfield extraction
  */
 fn sanity_check_extraction(
     bitfield_pattern: &[u8],
-    num_chunks: u16,
+    num_chunks: usize,
     byte_stream_len: usize,
 ) -> Result<(), BfaExtractionError> {
     // Find the number of bits per chunk
@@ -137,8 +131,9 @@ fn sanity_check_extraction(
         .iter()
         .map(|&bitsize| bitsize as usize)
         .sum();
+
     // Find the number of bits we expect present in the byte stream
-    let total_bits_needed = total_bits_per_chunk * num_chunks as usize;
+    let total_bits_needed = total_bits_per_chunk * num_chunks;
 
     // Ensure there are enough bits in the byte stream
     if byte_stream_len * 8 < total_bits_needed {
@@ -181,13 +176,12 @@ fn sanity_check_extraction(
 fn extract_bitfields(
     byte_stream: &[u8],
     bitfield_pattern: Vec<u8>,
-    num_chunks: u16,
+    num_chunks: usize,
 ) -> Result<Vec<Vec<u16>>, BfaExtractionError> {
     // Start with some sanity checks in debug mode. In release mode, we
     // leave them out for performance reasons. This will cause a crash in
     // API violations, but that's on you  ¯\_(ツ)_/¯
     #[cfg(debug_assertions)]
-
     sanity_check_extraction(bitfield_pattern.as_slice(), num_chunks, byte_stream.len())?;
 
     // --------------------------------------------------------------------------
@@ -203,7 +197,7 @@ fn extract_bitfields(
     let mut curr_byte = 2; // stream offset past current window edge
 
     // Preallocate result vectors and bitmasks
-    let mut result = Vec::with_capacity(num_chunks as usize);
+    let mut result = Vec::with_capacity(num_chunks);
     let mut chunk = Vec::with_capacity(bitfield_pattern.len());
     let masks: Vec<u16> = bitfield_pattern.iter().map(|&l| (1 << l) - 1).collect();
 
@@ -244,7 +238,6 @@ pub fn extract_bfa(
     bfa_payload: &[u8],
     extraction_config: ExtractionConfig,
 ) -> Result<Vec<Vec<u16>>, BfaExtractionError> {
-
     extract_bitfields(
         bfa_payload,
         extraction_config.bitfield_pattern,
@@ -256,75 +249,66 @@ pub fn extract_bfa(
 mod tests {
     use super::*;
     #[test]
-    fn test_from_he_mimo_ctrl_config_2_1() { 
-        
+    fn test_from_he_mimo_ctrl_config_2_1() {
         let byte_stream: &[u8] = &[0b11001000, 0b10000100, 0b00000000, 0b11000100, 0b00001101];
-    
+
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
         let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
         let expected_bitfield_pattern = vec![7, 5]; // 7 phi, 5 psi
-        assert_eq!(result_he_mimo.nc_index(), UInt::<u8, 3>::new(0));
-        assert_eq!(result_he_mimo.nr_index(), UInt::<u8, 3>::new(1));
+
         assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
         assert_eq!(result_he_ctrl.num_subcarrier, 500); //BW 160
-    
-        }
+    }
+
     #[test]
-    fn test_from_he_mimo_ctrl_config_3_2() { 
-        
+    fn test_from_he_mimo_ctrl_config_3_2() {
         let byte_stream: &[u8] = &[0b10010001, 0b10000000, 0b00000000, 0b11000100, 0b00001101];
-    
+
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
         let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
         let expected_bitfield_pattern = vec![4, 4, 2, 2, 4, 2]; // 4 phi, 2 psi
-        assert_eq!(result_he_mimo.nc_index(), UInt::<u8, 3>::new(1));
-        assert_eq!(result_he_mimo.nr_index(), UInt::<u8, 3>::new(2));
+
         assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
         assert_eq!(result_he_ctrl.num_subcarrier, 250); //BW 80
-    
-        }
+    }
+
     #[test]
-    fn test_from_he_mimo_ctrl_config_4_1() { 
-        
+    fn test_from_he_mimo_ctrl_config_4_1() {
         let byte_stream: &[u8] = &[0b01011000, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
-    
+
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
         let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
-        let expected_bitfield_pattern = vec![6, 6, 6, 4, 4,4]; // 6 phi, 4 psi
-        assert_eq!(result_he_mimo.nc_index(), UInt::<u8, 3>::new(0));
-        assert_eq!(result_he_mimo.nr_index(), UInt::<u8, 3>::new(3));
+        let expected_bitfield_pattern = vec![6, 6, 6, 4, 4, 4]; // 6 phi, 4 psi
+
         assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
         assert_eq!(result_he_ctrl.num_subcarrier, 122); //BW 40
-        }
-    #[test]
-    fn test_from_he_mimo_ctrl_config_4_2() { 
-        
-    let byte_stream: &[u8] = &[0b00011001, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
-
-    let result_he_mimo = HeMimoControl::from_buf(byte_stream);
-    let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
-    let expected_bitfield_pattern = vec![6, 6, 6, 4, 4, 4, 6, 6, 4, 4]; // 6 phi, 4 psi
-
-    assert_eq!(result_he_mimo.nc_index(), UInt::<u8, 3>::new(1));
-    assert_eq!(result_he_mimo.nr_index(), UInt::<u8, 3>::new(3));
-    assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
-    assert_eq!(result_he_ctrl.num_subcarrier, 64); //BW 20
-
     }
+
     #[test]
-    fn test_from_he_mimo_ctrl_config_4_4() { 
-        
-        let byte_stream: &[u8] = &[0b11011011, 0b10000111, 0b00000000, 0b11000100, 0b00001101];
-    
+    fn test_from_he_mimo_ctrl_config_4_2() {
+        let byte_stream: &[u8] = &[0b00011001, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
+
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
         let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
-        let expected_bitfield_pattern = vec![9,9,9,7,7,7,9,9,7,7,9,7,]; // 9 phi, 7 psi
-        assert_eq!(result_he_mimo.nc_index(), UInt::<u8, 3>::new(3));
-        assert_eq!(result_he_mimo.nr_index(), UInt::<u8, 3>::new(3));
+        let expected_bitfield_pattern = vec![6, 6, 6, 4, 4, 4, 6, 6, 4, 4]; // 6 phi, 4 psi
+
+        assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
+        assert_eq!(result_he_ctrl.num_subcarrier, 64); //BW 20
+    }
+
+    #[test]
+    fn test_from_he_mimo_ctrl_config_4_4() {
+        let byte_stream: &[u8] = &[0b11011011, 0b10000111, 0b00000000, 0b11000100, 0b00001101];
+
+        let result_he_mimo = HeMimoControl::from_buf(byte_stream);
+        let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
+        let expected_bitfield_pattern = vec![9, 9, 9, 7, 7, 7, 9, 9, 7, 7, 9, 7]; // 9 phi, 7 psi
+
         assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
         assert_eq!(result_he_ctrl.num_subcarrier, 160); //BW 160
-    
-        }
+    }
+
+    #[test]
     fn extraction() {
         // Example payload 11001010 11110000 01011100 00111110
         // Reverse:        01010011 00001111 00111010 01111100
@@ -373,29 +357,44 @@ mod tests {
         );
     }
 
-
     #[test]
-    fn test_config_4_2_extract(){
+    fn test_config_4_2_extract() {
         let byte_stream_ctrl: &[u8] = &[0b00011001, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
-    
+
         let result_he_mimo = HeMimoControl::from_buf(byte_stream_ctrl);
         let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
         let expected_bitfield_pattern = vec![6, 6, 6, 4, 4, 4, 6, 6, 4, 4]; // 6 phi, 4 psi
-    
-        assert_eq!(result_he_mimo.nc_index(), UInt::<u8, 3>::new(1));
-        assert_eq!(result_he_mimo.nr_index(), UInt::<u8, 3>::new(3));
+
         assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
-        assert_eq!(result_he_ctrl.num_subcarrier, 64); //BW 20
+        assert_eq!(result_he_ctrl.num_subcarrier, 64);
+        //BW 20
         // example: 10010111 10011111 01010011 11011101 00111001 00101110 01011110 01111110 | 01001110 01110101 11100111 10111000 01110111 11111001 00111001 11010101 |
         // reverse: 111010 01 1111 1001 11 0010 10 10 1110 11 1001 1100 01 1101 00 01   111010 011111 10 | 0111 0010 1010 1110 111001 11 0001 1101 1110 1110 10011111 |
         // chunk  : 111010 011111  100111  0010 1010  1110 111001  110001  1101 0001  | 111010 011111 100111    0010 1010 1110 111001 110001  1101 1110 (1110 10011111)
         // reverse: 010111 111110 111001 0100 0101 0111 100111 100011 1011 1000 |       010111 111110 111001    0100 0101 0111 100111 100011  1011 0111
-        let byte_stream_extract: &[u8] = &[0b10010111, 0b10011111, 0b01010011, 0b11011101, 0b00111001, 0b00101110, 0b01011110, 0b01111110,  0b01001110, 0b01110101,0b11100111,0b10111000, 0b01110111,0b11111001,0b00111001, 0b11010101 ];
+        let byte_stream_extract: &[u8] = &[
+            0b10010111, 0b10011111, 0b01010011, 0b11011101, 0b00111001, 0b00101110, 0b01011110,
+            0b01111110, 0b01001110, 0b01110101, 0b11100111, 0b10111000, 0b01110111, 0b11111001,
+            0b00111001, 0b11010101,
+        ];
         let num_chunks = 2;
-        let result = extract_bitfields(byte_stream_extract, result_he_ctrl.bitfield_pattern, num_chunks);
+        let result = extract_bitfields(
+            byte_stream_extract,
+            result_he_ctrl.bitfield_pattern,
+            num_chunks,
+        );
         assert!(result.is_ok());
         let result = result.unwrap();
-        let expected: Vec<Vec<u16>> = vec![vec![0b010111, 0b111110,0b111001, 0b0100, 0b0101,0b0111,0b100111,0b100011, 0b1011, 0b1000], vec![0b010111, 0b111110, 0b111001, 0b0100, 0b0101, 0b0111, 0b100111, 0b100011,  0b1011 ,0b0111]];
+        let expected: Vec<Vec<u16>> = vec![
+            vec![
+                0b010111, 0b111110, 0b111001, 0b0100, 0b0101, 0b0111, 0b100111, 0b100011, 0b1011,
+                0b1000,
+            ],
+            vec![
+                0b010111, 0b111110, 0b111001, 0b0100, 0b0101, 0b0111, 0b100111, 0b100011, 0b1011,
+                0b0111,
+            ],
+        ];
         assert!(
             result == expected,
             "Expected {:?}, but got: {:?}",
@@ -405,28 +404,46 @@ mod tests {
     }
 
     #[test]
-    fn test_config_4_2_extract_large_bitfield_error(){
+    fn test_config_4_2_extract_large_bitfield_error() {
         let byte_stream_ctrl: &[u8] = &[0b11011001, 0b10000111, 0b00000000, 0b11000100, 0b00001101];
-    
+
         let result_he_mimo = HeMimoControl::from_buf(byte_stream_ctrl);
         let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
-        let expected_bitfield_pattern = vec![9,9,9,7,7,7,9,9,7,7]; // 9 phi, 7 psi
-        assert_eq!(result_he_mimo.nc_index(), UInt::<u8, 3>::new(1));
-        assert_eq!(result_he_mimo.nr_index(), UInt::<u8, 3>::new(3));
+        let expected_bitfield_pattern = vec![9, 9, 9, 7, 7, 7, 9, 9, 7, 7]; // 9 phi, 7 psi
+
         assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
         assert_eq!(result_he_ctrl.num_subcarrier, 160); //BW 160
 
         // example: 10010111 10011111 01010011 11011101 00111001 00101110 01011110 01111110 | 01001110 01110101 11100111 10111000 01110111 11111001 00111001 11010101 |
         // reverse: 111010011 111100111 001010101 1101110 01 11000 11101000 1111010 011111 10 | 0111 0010 1010 1110 111001 11 0001 1101 1110 1110 10011111 |
         // chunk  : 111010011 111100111 001010101 1101110 0111000  11101000 111101001 111110011 1001010 1011101 (11001 110001  1101 1110 (1110 10011111)
-        // reverse: 110010111 111001111 101010100 0111011 0001110  00010111 100101111 110011111 0101001 1011101 
-        let byte_stream_extract: &[u8] = &[0b10010111, 0b10011111, 0b01010011, 0b11011101, 0b00111001, 0b00101110, 0b01011110, 0b01111110,  0b01001110, 0b01110101,0b11100111,0b10111000, 0b01110111,0b11111001,0b00111001, 0b11010101 ];
+        // reverse: 110010111 111001111 101010100 0111011 0001110  00010111 100101111 110011111 0101001 1011101
+        let byte_stream_extract: &[u8] = &[
+            0b10010111, 0b10011111, 0b01010011, 0b11011101, 0b00111001, 0b00101110, 0b01011110,
+            0b01111110, 0b01001110, 0b01110101, 0b11100111, 0b10111000, 0b01110111, 0b11111001,
+            0b00111001, 0b11010101,
+        ];
         let num_chunks = 1;
-        let result = extract_bitfields(byte_stream_extract, result_he_ctrl.bitfield_pattern, num_chunks);
+        let result = extract_bitfields(
+            byte_stream_extract,
+            result_he_ctrl.bitfield_pattern,
+            num_chunks,
+        );
         assert!(result.is_ok());
         let result = result.unwrap();
-        let expected: Vec<Vec<u16>> = vec![vec![0b110010111 ,0b111001111 ,0b101010100 ,0b0111011 ,0b0001110  ,0b00010111 ,0b100101111, 0b110011111 ,0b0101001 ,0b1011101]];
-        assert_ne!(result , expected);  
+        let expected: Vec<Vec<u16>> = vec![vec![
+            0b110010111,
+            0b111001111,
+            0b101010100,
+            0b0111011,
+            0b0001110,
+            0b00010111,
+            0b100101111,
+            0b110011111,
+            0b0101001,
+            0b1011101,
+        ]];
+        assert_ne!(result, expected);
     }
     #[test]
     fn capacity_error() {
