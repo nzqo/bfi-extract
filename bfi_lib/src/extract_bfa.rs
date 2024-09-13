@@ -248,7 +248,7 @@ pub fn extract_bfa(
 mod tests {
     use super::*;
     #[test]
-    fn test_2by1_extractioncfg_parsing() {
+    fn extractioncfg_parsing_2by1() {
         let byte_stream: &[u8] = &[0b11001000, 0b10000100, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn test_3by2_extractioncfg_parsing() {
+    fn extractioncfg_parsing_3by2() {
         let byte_stream: &[u8] = &[0b10010001, 0b10000000, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn test_4by1_extractioncfg_parsing() {
+    fn extractioncfg_parsing_4by1() {
         let byte_stream: &[u8] = &[0b01011000, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -284,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn test_4by2_extractioncfg_parsing() {
+    fn extractioncfg_parsing_4by2() {
         let byte_stream: &[u8] = &[0b00011001, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -296,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn test_4by4_extractioncfg_parsing() {
+    fn extractioncfg_parsing_4by4() {
         let byte_stream: &[u8] = &[0b11011011, 0b10000111, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn extraction() {
+    fn bitfield_extraction_base() {
         // Example payload 11001010 11110000 01011100 00111110
         // Reverse:        01010011 00001111 00111010 01111100
         // Chunk:          010100 1100 0011 110011 1010 0111 (1100)
@@ -318,13 +318,15 @@ mod tests {
             vec![0b001010, 0b0011, 0b1100],
             vec![0b110011, 0b0101, 0b1110],
         ];
-        let bitfield_pattern = vec![6, 4, 4]; // Example pattern (6 bits, 4 bits, 4 bits)
-        let num_chunks = 2; // Example number of chunks
+
+        // Example pattern (6 bits, 4 bits, 4 bits) x 2
+        let bitfield_pattern = vec![6, 4, 4];
+        let num_chunks = 2;
 
         let result = extract_bitfields(byte_stream, bitfield_pattern, num_chunks);
         assert!(result.is_ok());
-        let result = result.unwrap();
 
+        let result = result.unwrap();
         assert!(
             result == expected,
             "Expected {:?}, but got: {:?}",
@@ -334,20 +336,22 @@ mod tests {
     }
 
     #[test]
-    fn test_large_bitfields() {
+    fn extract_bitfields_long_bitsize() {
         // Example payload 11001010 11110000
         // Reverse:        01010011 00001111
         // Chunk:          010100110 00011 11
         // Reverse:        011001010 11000 11
         let byte_stream: &[u8] = &[0b11001010, 0b11110000];
         let expected: Vec<Vec<u16>> = vec![vec![0b011001010, 0b11000, 0b11]];
-        let bitfield_pattern = vec![9, 5, 2]; // Example pattern (6 bits, 4 bits, 4 bits)
+
+        // use longer bitsize of 9
+        let bitfield_pattern = vec![9, 5, 2];
         let num_chunks = 1; // Example number of chunks
 
         let result = extract_bitfields(byte_stream, bitfield_pattern, num_chunks);
         assert!(result.is_ok());
-        let result = result.unwrap();
 
+        let result = result.unwrap();
         assert!(
             result == expected,
             "Expected {:?}, but got: {:?}",
@@ -357,8 +361,8 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_as_4by2() {
-        // example: 10010111 10011111 01010011 11011101 00111001 00101110 01011110 01111110 01001110 01110101 11100111 10111000 01110111 11111001 00111001 11010101 
+    fn extract_as_4by2() {
+        // example: 10010111 10011111 01010011 11011101 00111001 00101110 01011110 01111110 01001110 01110101 11100111 10111000 01110111 11111001 00111001 11010101
         // reverse: 11101001 11111001 11001010 10111011 10011100 01110100 01111010 01111110 01110010 10101110 11100111 00011101 11101110 10011111 10011100 10101011
         // chunk  : 111010 011111 100111 0010 1010 1110 111001 110001 1101 0001 | 111010 011111 100111 0010 1010 1110 111001 110001 1101 1110 (1110 10011111)
         // reverse: 010111 111110 111001 0100 0101 0111 100111 100011 1011 1000 | 010111 111110 111001 0100 0101 0111 100111 100011 1011 0111
@@ -369,8 +373,10 @@ mod tests {
         ];
         let bitfield_pattern = vec![6, 6, 6, 4, 4, 4, 6, 6, 4, 4];
         let num_chunks = 2;
+
         let result = extract_bitfields(byte_stream_extract, bitfield_pattern, num_chunks);
         assert!(result.is_ok());
+
         let result = result.unwrap();
         let expected: Vec<Vec<u16>> = vec![
             vec![
@@ -391,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_as_4by2_large_bitfields() {
+    fn extract_as_4by2_large_bitfields() {
         // example: 10010111 10011111 01010011 11011101 00111001 00101110 01011110 01111110 01001110 01110101 11100111 10111000 01110111 11111001 00111001 11010101
         // reverse: 11101001 11111001 11001010 10111011 10011100 01110100 01111010 01111110 01110010 10101110 11100111 00011101 11101110 10011111 10011100 10101011
         // chunk  : 111010011 111100111 001010101 1101110 0111000 1110100 011110100 111111001 1100101 0101110  (11100111 00011101 11101110 10011111 10011100 10101011)
@@ -403,6 +409,7 @@ mod tests {
         ];
         let expected_bitfield_pattern = vec![9, 9, 9, 7, 7, 7, 9, 9, 7, 7];
         let num_chunks = 1;
+
         let result = extract_bitfields(byte_stream_extract, expected_bitfield_pattern, num_chunks);
         assert!(result.is_ok());
         let result = result.unwrap();
