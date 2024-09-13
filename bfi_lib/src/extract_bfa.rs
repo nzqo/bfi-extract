@@ -1,23 +1,136 @@
+//use core::panicking::panic;
 /** ------------------------------------------------------------
  * BFA extraction from bytestream payload
  * ------------------------------------------------------------- */
 use crate::errors::BfaExtractionError;
 use crate::he_mimo_ctrl::HeMimoControl;
+use crate::he_mimo_ctrl::Bandwidth;
 
 #[rustfmt::skip]
+
 pub struct ExtractionConfig {
 	pub bitfield_pattern : Vec<u8>, // Length of bitfields per subcarrier-chunk
 	pub num_subcarrier   : u16,     // Number of subcarriers
 }
+pub struct  PhiPsiBit{
+    pub phi_bit:u8,         // Phi vit value 
+    pub psi_bit:u8,         // Psi bit value 
+}
+
+
+// Define constant patterns //TODO check values again 
+const PATTERN_2_1: [&str; 2] =  ["phi", "psi"]; // same pattrn for 2x2
+const PATTERN_3_1: [&str; 4] =  ["phi", "phi", "psi", "psi"];
+const PATTERN_3_2: [&str; 6] =  ["phi", "phi", "psi", "psi", "phi", "psi"]; // same pattrn for 3x3
+const PATTERN_4_1: [&str; 6] =  ["phi", "phi", "phi", "psi", "psi","psi"];
+const PATTERN_4_2: [&str; 10] = ["phi","phi","phi","psi","psi","psi","phi","phi","psi","psi",]; 
+const PATTERN_4_3: [&str; 12] = ["phi","phi","phi","psi","psi","psi","phi","phi","psi","psi","phi","psi",]; // same pattrn for 4x4
 
 impl ExtractionConfig {
-    pub fn from_he_mimo_ctrl(_mimo_ctrl: &HeMimoControl) -> Self {
-        ExtractionConfig {
-            bitfield_pattern: vec![6, 6, 6, 4, 4, 4, 6, 6, 4, 4],
-            num_subcarrier: 62,
-        }
+    pub fn from_he_mimo_ctrl(mimo_ctrl: &HeMimoControl) -> Self {
+        println!("Codebook Information: {}", mimo_ctrl.codebook_info());
+        println!("Feedback Type: {}", mimo_ctrl.feedback_type());
+        println!("NC : {}", mimo_ctrl.nc_index());
+        println!("NR : {}", mimo_ctrl.nr_index());
+
+        /*
+        * ******************* derive PhiPsiBit for  bitfield_pattern *******************  
+        */
+        // Create a new instance of PhiPsiBit according to the values of codebook_information
+        // and feedback type, if not matched raise error 
+        // for mor information see IEEE 802.11ax Table 9-29a
+        let phi_psi = match (mimo_ctrl.codebook_info().value(), mimo_ctrl.feedback_type().value()) {
+            (0, 0) => PhiPsiBit { phi_bit: 4, psi_bit: 2 },     // fb 0 -> SU 
+            (0, 1) => PhiPsiBit { phi_bit: 7, psi_bit: 5 },     // fb 1 -> MU
+            (1, 0) => PhiPsiBit { phi_bit: 6, psi_bit: 4 },     // fb 0 -> SU
+            (1, 1) => PhiPsiBit { phi_bit: 9, psi_bit: 7 },     // fb 1 -> MU
+            (_, 2) => panic!(" Feedback type is set to CQI (Channel Quality Indication) coodboo is reserved"),
+            _ => panic!("Invalid coodebook or feedback type values"),
+        };
+        
+        /*
+        * ******************* Set bitfield_pattern *******************  
+        */
+        let nr_index = mimo_ctrl.nr_index().value() as usize;
+        let nc_index = mimo_ctrl.nc_index().value() as usize;
+
+        let selected_pattern: &[&str] = if nr_index >= nc_index {
+            // NOTE: nr and nc are -1 due to indexing by 0 
+            if (nr_index == 1 && nc_index == 0 ) || (nr_index == 1 && nc_index == 2){ // 2x1 and 2x2
+                &PATTERN_2_1
+            } else if nr_index == 2 && nc_index == 0 { //3x1
+                &PATTERN_3_1
+            } else if (nr_index == 2 && nc_index == 1)  || (nr_index == 2 && nc_index == 2){ //3x2 and 3x3
+                &PATTERN_3_2
+            } else if nr_index == 3 && nc_index == 0 { //4x1
+                &PATTERN_4_1
+            } else if nr_index == 3 && nc_index == 1 { // 4x2
+                &PATTERN_4_2
+            } else if (nr_index == 3 && nc_index == 2) || (nr_index == 3 && nc_index == 3) { // 4x3 and 4x4
+                &PATTERN_4_3
+            } else {
+                panic!("Invalid nr_index or nc_index in the HE Mimo Control field ")
+            }
+        } else {
+                panic!("Invalid nr_index or nc_index in the HE Mimo Control field ");
+        };
+    
+        let bitfield_pattern: Vec<u8> = selected_pattern.iter()
+            .map(|&placeholder| match placeholder {
+                "phi" => phi_psi.phi_bit, // Substitute 'phi' with PhiPsiBit.psi_bit
+                "psi" => phi_psi.psi_bit, // Substitute 'psi' with PhiPsiBit.psi_bit
+                _ => panic!("Something went wrong wit the place holder while mapping its real values"),   
+            })
+            .collect();
+            
+            let mut num_sub = 0;
+            /*
+            * ******************* Set BW *******************  
+            */
+            // NOTE: based on grouping bit the number of subcarrier change 
+            // for more details see IEEE 802.11ax Table 9-91a and Table 9-91e
+            if mimo_ctrl.grouping().value() == 0{   // subcarrier grouping: 4
+            num_sub = match mimo_ctrl.bandwidth().try_into(){
+                Ok(Bandwidth::Bw20) => 64,          // [–122, –120, –116, …, –8, –4, –2, 2, 4, 8, …, 116, 120, 122]
+                Ok(Bandwidth::Bw40) => 122,         // [–244, –240, …, –8, –4, 4, 8, …, 240, 244]
+                Ok(Bandwidth::Bw80) => 250,         // [–500, –496, …, –8, –4, 4, 8, …, 496, 500]
+                Ok(Bandwidth::Bw160) => 500,        // [–1012, –1008, …, –520, –516, –508, –504, …, –16, –12, 12, 16, …, 504, 508, 516, 520, …, 1008, 1012]
+                _ => panic!("Invalid BW")
+            };          
+
+            } else if mimo_ctrl.grouping().value() == 1 {   // subcarrier grouping: 4
+            num_sub = match mimo_ctrl.bandwidth().try_into(){
+                    Ok(Bandwidth::Bw20) => 50,      // [–122, –116, –100, …, –20, –4, –2, 2, 4, 20, …, 100, 116, 122]
+                    Ok(Bandwidth::Bw40) => 32,      // [–244, –228, …, –20, –4, 4, 20, …, 228, 244]
+                    Ok(Bandwidth::Bw80) => 64,      // [–500, –484, …, –20, –4, 4, 20, …, 484, 500]
+                    Ok(Bandwidth::Bw160) => 160,    //  [–1012, –996, …, –532, –516, –508, –492, …, –28, –12, 12, 28, …, 492, 508, 516, 532, …, 996, 1012]
+                    _ => panic!("Invalid BW")
+            };  
+            } else {
+                panic!("Invalid grouping of subcarrier");
+            }
+
+
+            // Initialize the ExtractionConfig
+            let config = ExtractionConfig {
+                bitfield_pattern: bitfield_pattern,
+                num_subcarrier: num_sub,
+            };
+
+        // println!("bitfield_pattern : {}", bitfield_pattern);
+        // println!("selected_pattern : {}", selected_pattern);
+        println!("NC : {}", mimo_ctrl.nc_index());
+        println!("Phi: {}", phi_psi.phi_bit);
+        println!("Psi: {}", phi_psi.psi_bit);
+        println!("Bitfield Pattern: {:?}", config.bitfield_pattern);
+        println!("num_sub {}", num_sub);
+        config // Return the config instance1
     }
 }
+
+
+
+
 
 /**
  * Some sanity checks for the BFA bitfield extraction
@@ -32,7 +145,7 @@ fn sanity_check_extraction(
         .iter()
         .map(|&bitsize| bitsize as usize)
         .sum();
-
+    println!("total_bits_per_chunk {}", total_bits_per_chunk);
     // Find the number of bits we expect present in the byte stream
     let total_bits_needed = total_bits_per_chunk * num_chunks as usize;
 
@@ -83,6 +196,9 @@ fn extract_bitfields(
     // leave them out for performance reasons. This will cause a crash in
     // API violations, but that's on you  ¯\_(ツ)_/¯
     #[cfg(debug_assertions)]
+    println!("byte_stream.len() {}", byte_stream.len());
+    println!("num_chunks {}", num_chunks);
+    println!("bitfield_pattern.as_slice() {:?}", bitfield_pattern.as_slice());
     sanity_check_extraction(bitfield_pattern.as_slice(), num_chunks, byte_stream.len())?;
 
     // --------------------------------------------------------------------------
@@ -139,6 +255,9 @@ pub fn extract_bfa(
     bfa_payload: &[u8],
     extraction_config: ExtractionConfig,
 ) -> Result<Vec<Vec<u16>>, BfaExtractionError> {
+    println!("bfa_payload.len() {}", bfa_payload.len());
+    // println!("num_chunks {}", num_chunks);
+    // println!("bitfield_pattern.as_slice() {:?}", bitfield_pattern.as_slice());
     extract_bitfields(
         bfa_payload,
         extraction_config.bitfield_pattern,
@@ -149,8 +268,30 @@ pub fn extract_bfa(
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    // use crate::he_mimo_ctrl::HeMimoControl;
     #[test]
+    // fn test_from_he_mimo_ctrl() { 
+        
+    //     let mimo_ctrl = he_mimo_ctrl{
+    //     // Initialize with the appropriate values
+    //     codebook_info_value: 1,
+    //     feedback_type_value: 0,
+    //     nc_index_value: 3,
+    //     nr_index_value: 1,
+    //     grouping_value: 0,
+    //     bandwidth_value: Bandwidth::Bw20,
+    // };
+
+    // // Call the function
+    // let config = ExtractionConfig::from_he_mimo_ctrl(&mimo_ctrl);
+
+    // // Assert the expected outcomes
+    // let expected_bitfield_pattern = vec![6, 4, 6, 4, 6, 4, 6, 4, 6, 4]; // 4 phi, 2 psi
+    // let expected_num_subcarrier = 64; // Expected number of subcarriers for BW20 with grouping 0
+    
+    // assert_eq!(config.bitfield_pattern, expected_bitfield_pattern);
+    // assert_eq!(config.num_subcarrier, expected_num_subcarrier);
+    // }
     fn extraction() {
         // Example payload 11001010 11110000 01011100 00111110
         // Reverse:        01010011 00001111 00111010 01111100
