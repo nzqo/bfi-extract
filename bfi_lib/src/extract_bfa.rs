@@ -18,7 +18,7 @@ pub struct  PhiPsiBit{
 }
 
 
-// Define constant patterns //TODO check values again 
+// Define constant patterns 
 const PATTERN_2_1: [&str; 2] =  ["phi", "psi"]; // same pattrn for 2x2
 const PATTERN_3_1: [&str; 4] =  ["phi", "phi", "psi", "psi"];
 const PATTERN_3_2: [&str; 6] =  ["phi", "phi", "psi", "psi", "phi", "psi"]; // same pattrn for 3x3
@@ -28,11 +28,6 @@ const PATTERN_4_3: [&str; 12] = ["phi","phi","phi","psi","psi","psi","phi","phi"
 
 impl ExtractionConfig {
     pub fn from_he_mimo_ctrl(mimo_ctrl: &HeMimoControl) -> Self {
-        println!("Codebook Information: {}", mimo_ctrl.codebook_info());
-        println!("Feedback Type: {}", mimo_ctrl.feedback_type());
-        println!("NC : {}", mimo_ctrl.nc_index());
-        println!("NR : {}", mimo_ctrl.nr_index());
-
         /*
         * ******************* derive PhiPsiBit for  bitfield_pattern *******************  
         */
@@ -117,13 +112,7 @@ impl ExtractionConfig {
                 num_subcarrier: num_sub,
             };
 
-        // println!("bitfield_pattern : {}", bitfield_pattern);
-        // println!("selected_pattern : {}", selected_pattern);
-        println!("NC : {}", mimo_ctrl.nc_index());
-        println!("Phi: {}", phi_psi.phi_bit);
-        println!("Psi: {}", phi_psi.psi_bit);
-        println!("Bitfield Pattern: {:?}", config.bitfield_pattern);
-        println!("num_sub {}", num_sub);
+
         config // Return the config instance1
     }
 }
