@@ -1,4 +1,3 @@
-//use core::panicking::panic;
 /** ------------------------------------------------------------
  * BFA extraction from bytestream payload
  * ------------------------------------------------------------- */
@@ -249,7 +248,7 @@ pub fn extract_bfa(
 mod tests {
     use super::*;
     #[test]
-    fn test_from_he_mimo_ctrl_config_2_1() {
+    fn test_2by1_extractioncfg_parsing() {
         let byte_stream: &[u8] = &[0b11001000, 0b10000100, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -261,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_he_mimo_ctrl_config_3_2() {
+    fn test_3by2_extractioncfg_parsing() {
         let byte_stream: &[u8] = &[0b10010001, 0b10000000, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -273,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_he_mimo_ctrl_config_4_1() {
+    fn test_4by1_extractioncfg_parsing() {
         let byte_stream: &[u8] = &[0b01011000, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -285,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_he_mimo_ctrl_config_4_2() {
+    fn test_4by2_extractioncfg_parsing() {
         let byte_stream: &[u8] = &[0b00011001, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -297,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_he_mimo_ctrl_config_4_4() {
+    fn test_4by4_extractioncfg_parsing() {
         let byte_stream: &[u8] = &[0b11011011, 0b10000111, 0b00000000, 0b11000100, 0b00001101];
 
         let result_he_mimo = HeMimoControl::from_buf(byte_stream);
@@ -358,16 +357,8 @@ mod tests {
     }
 
     #[test]
-    fn test_config_4_2_extract() {
-        let byte_stream_ctrl: &[u8] = &[0b00011001, 0b10000010, 0b00000000, 0b11000100, 0b00001101];
-
-        let result_he_mimo = HeMimoControl::from_buf(byte_stream_ctrl);
-        let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
-        let expected_bitfield_pattern = vec![6, 6, 6, 4, 4, 4, 6, 6, 4, 4]; // 6 phi, 4 psi
-
-        assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
-        assert_eq!(result_he_ctrl.num_subcarrier, 64);
-        //BW 20
+    fn test_extract_as_4by2() {
+ 
         // example: 10010111 10011111 01010011 11011101 00111001 00101110 01011110 01111110 | 01001110 01110101 11100111 10111000 01110111 11111001 00111001 11010101 |
         // reverse: 111010 01 1111 1001 11 0010 10 10 1110 11 1001 1100 01 1101 00 01   111010 011111 10 | 0111 0010 1010 1110 111001 11 0001 1101 1110 1110 10011111 |
         // chunk  : 111010 011111  100111  0010 1010  1110 111001  110001  1101 0001  | 111010 011111 100111    0010 1010 1110 111001 110001  1101 1110 (1110 10011111)
@@ -377,10 +368,11 @@ mod tests {
             0b01111110, 0b01001110, 0b01110101, 0b11100111, 0b10111000, 0b01110111, 0b11111001,
             0b00111001, 0b11010101,
         ];
+        let bitfield_pattern = vec![6, 6, 6, 4, 4, 4, 6, 6, 4, 4]; 
         let num_chunks = 2;
         let result = extract_bitfields(
             byte_stream_extract,
-            result_he_ctrl.bitfield_pattern,
+            bitfield_pattern,
             num_chunks,
         );
         assert!(result.is_ok());
@@ -404,29 +396,22 @@ mod tests {
     }
 
     #[test]
-    fn test_config_4_2_extract_large_bitfield_error() {
-        let byte_stream_ctrl: &[u8] = &[0b11011001, 0b10000111, 0b00000000, 0b11000100, 0b00001101];
+    fn test_extract_as_4by2_large_bitfields() {
 
-        let result_he_mimo = HeMimoControl::from_buf(byte_stream_ctrl);
-        let result_he_ctrl = ExtractionConfig::from_he_mimo_ctrl(&result_he_mimo);
-        let expected_bitfield_pattern = vec![9, 9, 9, 7, 7, 7, 9, 9, 7, 7]; // 9 phi, 7 psi
-
-        assert_eq!(result_he_ctrl.bitfield_pattern, expected_bitfield_pattern);
-        assert_eq!(result_he_ctrl.num_subcarrier, 160); //BW 160
-
-        // example: 10010111 10011111 01010011 11011101 00111001 00101110 01011110 01111110 | 01001110 01110101 11100111 10111000 01110111 11111001 00111001 11010101 |
-        // reverse: 111010011 111100111 001010101 1101110 01 11000 11101000 1111010 011111 10 | 0111 0010 1010 1110 111001 11 0001 1101 1110 1110 10011111 |
-        // chunk  : 111010011 111100111 001010101 1101110 0111000  11101000 111101001 111110011 1001010 1011101 (11001 110001  1101 1110 (1110 10011111)
-        // reverse: 110010111 111001111 101010100 0111011 0001110  00010111 100101111 110011111 0101001 1011101
+        // example: 10010111 10011111 01010011 11011101 00111001 00101110 01011110 01111110 01001110 01110101 11100111 10111000 01110111 11111001 00111001 11010101
+        // reverse: 11101001 11111001 11001010 10111011 10011100 01110100 01111010 01111110 01110010 10101110 11100111 00011101 11101110 10011111 10011100 10101011
+        // chunk  : 111010011 111100111 001010101 1101110 0111000 1110100 011110100 111111001 1100101 0101110  (11100111 00011101 11101110 10011111 10011100 10101011)
+        // reverse: 110010111 111001111 101010100 0111011 0001110 0010111 001011110 100111111 1010011 0111010 
         let byte_stream_extract: &[u8] = &[
             0b10010111, 0b10011111, 0b01010011, 0b11011101, 0b00111001, 0b00101110, 0b01011110,
             0b01111110, 0b01001110, 0b01110101, 0b11100111, 0b10111000, 0b01110111, 0b11111001,
             0b00111001, 0b11010101,
         ];
+        let expected_bitfield_pattern = vec![9, 9, 9, 7, 7, 7, 9, 9, 7, 7];
         let num_chunks = 1;
         let result = extract_bitfields(
             byte_stream_extract,
-            result_he_ctrl.bitfield_pattern,
+            expected_bitfield_pattern,
             num_chunks,
         );
         assert!(result.is_ok());
@@ -437,14 +422,15 @@ mod tests {
             0b101010100,
             0b0111011,
             0b0001110,
-            0b00010111,
-            0b100101111,
-            0b110011111,
-            0b0101001,
-            0b1011101,
+            0b0010111,
+            0b001011110,
+            0b100111111,
+            0b1010011,
+            0b0111010,
         ]];
-        assert_ne!(result, expected);
+        assert_eq!(result, expected);
     }
+
     #[test]
     fn capacity_error() {
         // Example payload 11001010 11110000 01011100 00111110
