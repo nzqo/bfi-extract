@@ -8,7 +8,7 @@ use bilge::prelude::*;
  */
 #[bitsize(2)]
 #[derive(FromBits, Debug, Eq, PartialEq)]
-enum Bandwidth {
+pub enum Bandwidth {
     Bw20,
     Bw40,
     Bw80,
