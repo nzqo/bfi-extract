@@ -134,7 +134,6 @@ fn sanity_check_extraction(
         .iter()
         .map(|&bitsize| bitsize as usize)
         .sum();
-    println!("total_bits_per_chunk {}", total_bits_per_chunk);
     // Find the number of bits we expect present in the byte stream
     let total_bits_needed = total_bits_per_chunk * num_chunks as usize;
 
@@ -185,9 +184,7 @@ fn extract_bitfields(
     // leave them out for performance reasons. This will cause a crash in
     // API violations, but that's on you  ¯\_(ツ)_/¯
     #[cfg(debug_assertions)]
-    println!("byte_stream.len() {}", byte_stream.len());
-    println!("num_chunks {}", num_chunks);
-    println!("bitfield_pattern.as_slice() {:?}", bitfield_pattern.as_slice());
+
     sanity_check_extraction(bitfield_pattern.as_slice(), num_chunks, byte_stream.len())?;
 
     // --------------------------------------------------------------------------
@@ -244,9 +241,7 @@ pub fn extract_bfa(
     bfa_payload: &[u8],
     extraction_config: ExtractionConfig,
 ) -> Result<Vec<Vec<u16>>, BfaExtractionError> {
-    println!("bfa_payload.len() {}", bfa_payload.len());
-    // println!("num_chunks {}", num_chunks);
-    // println!("bitfield_pattern.as_slice() {:?}", bitfield_pattern.as_slice());
+
     extract_bitfields(
         bfa_payload,
         extraction_config.bitfield_pattern,
