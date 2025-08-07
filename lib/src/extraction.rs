@@ -356,9 +356,7 @@ mod tests {
         let result = result.unwrap();
         assert!(
             result == expected,
-            "Expected {:?}, but got: {:?}",
-            expected,
-            result
+            "Expected {expected:?}, but got: {result:?}"
         );
     }
 
@@ -381,9 +379,7 @@ mod tests {
         let result = result.unwrap();
         assert!(
             result == expected,
-            "Expected {:?}, but got: {:?}",
-            expected,
-            result
+            "Expected {expected:?}, but got: {result:?}"
         );
     }
 
@@ -417,9 +413,7 @@ mod tests {
         ];
         assert!(
             result == expected,
-            "Expected {:?}, but got: {:?}",
-            expected,
-            result
+            "Expected {expected:?}, but got: {result:?}"
         );
     }
 

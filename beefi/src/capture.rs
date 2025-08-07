@@ -79,7 +79,7 @@ pub fn run_offline_capture(args: OfflineCaptureArgs) {
     let data = extract_from_pcap(args.pcap_in);
 
     if args.print {
-        println!("Data read: {:?}", data);
+        println!("Data read: {data:?}",);
     }
 
     if let Some(file) = args.bfa_out {

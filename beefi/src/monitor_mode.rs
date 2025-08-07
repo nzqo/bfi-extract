@@ -14,7 +14,7 @@ pub fn monitor_mode(interface: &str, channel: u8, bandwidth: u16) -> io::Result<
         _ => {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
-                format!("Invalid bandwidth value: {}", bandwidth),
+                format!("Invalid bandwidth value: {bandwidth}"),
             ));
         }
     };

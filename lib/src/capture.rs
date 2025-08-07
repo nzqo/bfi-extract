@@ -431,7 +431,7 @@ pub fn create_live_capture(
 ) -> Capture<Active> {
     log::info!("Creating live capture on interface: {}", interface);
     let devices = pcap::Device::list().unwrap_or_else(|e| {
-        panic!("Error listing devices: {}", e);
+        panic!("Error listing devices: {e}");
     });
 
     let device = devices

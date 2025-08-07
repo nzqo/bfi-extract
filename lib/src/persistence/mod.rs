@@ -117,8 +117,7 @@ impl std::str::FromStr for FileType {
             #[cfg(feature = "parquet")]
             "parquet" => Ok(FileType::Parquet),
             _ => Err(format!(
-                "Invalid file type: {}. Maybe spelling or missing a feature?",
-                s
+                "Invalid file type: {s}. Maybe spelling or missing a feature?"
             )),
         }
     }

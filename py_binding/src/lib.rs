@@ -379,7 +379,7 @@ fn beefi<'py>(_py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> {
 
         // --- Step 2. Convert BfaData to BfmData using your conversion function ---
         let bfm_internal = beefi_lib::to_bfm(&bfa_internal).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Conversion failed: {:?}", e))
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Conversion failed: {e:?}"))
         })?;
 
         // --- Step 3. Convert internal BfmData to PyBfmData for Python ---
@@ -442,10 +442,7 @@ fn beefi<'py>(_py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> {
 
             // Step 2: Convert internal BfaData to internal BfmData.
             let bfm_internal = beefi_lib::to_bfm(&bfa_internal).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Conversion failed: {:?}",
-                    e
-                ))
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Conversion failed: {e:?}"))
             })?;
 
             // Step 3: Convert internal BfmData back to PyBfmBatch fields.
